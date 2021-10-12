@@ -34,46 +34,52 @@ public:
     class Version
     {
     public:
-        Version() : next_(nullptr), root_(nullptr) {}
+        Version() : next_(nullptr), prev_(nullptr), root_(nullptr) {}
     #ifdef PRBT_TESTING
     public:
     #else
     private:
     #endif
         friend class PersistentRedBlackTree<Key, T>;
-        Version(Version* next, Node* root) : next_(next), root_(root) {}
-        Version* next_;// singly linked list
+        Version(Version* next, Version* prev, Node* root) : next_(next), prev_(prev), root_(root) {}
+        Version* next_;// linked list
+        Version* prev_;// linked list
         Node* root_;
     };
-    class Iterator : public std::iterator<std::bidirectional_iterator_tag, ValueType>
+    class ConstIterator : public std::iterator<std::bidirectional_iterator_tag, ValueType>
     {
     public:
-        Iterator& operator++() { node_ = tree_->TreeSuccessor(version_, node_); return *this; }
-        Iterator& operator--() { node_ = tree_->TreePredecessor(version_, node_); return *this; }
-        ValueType& operator*() const { return node_->value; }
-        ValueType* operator->() const { return &(node_->value); }
-        bool operator==(const Iterator& other) const { return node_ == other.node_; }
-        bool operator!=(const Iterator& other) const { return node_ != other.node_; }
-        Iterator() : node_(nullptr), tree_(nullptr), version_(nullptr) {}
+        ConstIterator& operator++() { node_ = tree_->TreeSuccessor(version_, node_); return *this; }
+        ConstIterator& operator--() { node_ = tree_->TreePredecessor(version_, node_); return *this; }
+        const ValueType& operator*() const { return node_->value; }
+        const ValueType* operator->() const { return &(node_->value); }
+        bool operator==(const ConstIterator& other) const { return node_ == other.node_; }
+        bool operator!=(const ConstIterator& other) const { return !(*this == other); }
+        ConstIterator() : node_(nullptr), tree_(nullptr), version_(nullptr) {}
         Version* version() { return version_; }
     private:
         friend class PersistentRedBlackTree<Key, T>;
-        Iterator(Node* node, PersistentRedBlackTree<Key, T>* tree, Version* version) 
+        ConstIterator(Node* node, PersistentRedBlackTree<Key, T>* tree, Version* version) 
             : node_(node), tree_(tree), version_(version) {}
         Node* node_;
         PersistentRedBlackTree<Key, T>* tree_;
         Version* version_;
     };
+
     PersistentRedBlackTree();
     ~PersistentRedBlackTree();
-    std::pair<Iterator, bool> Insert(Version* dependent_version, const ValueType& value);
-    std::pair<Version*, bool> Delete(Version* dependent_version, const Key& key);
+    std::pair<ConstIterator, bool> Insert(const ValueType& value, Version* dependent_version);
+    std::pair<ConstIterator, bool> InsertOrAssign(const ValueType& value, Version* dependent_version);
+    std::pair<Version*, bool> Delete(const Key& key, Version* dependent_version);
+    std::pair<ConstIterator, bool> Insert(const ValueType& value);
+    std::pair<ConstIterator, bool> InsertOrAssign(const ValueType& value);
+    std::pair<Version*, bool> Delete(const Key& key);
+    void RemoveVersion(Version* version);
     void Clear();
-    T& At(const Key& key);
-    Iterator Find(const Key& key);
-    Iterator Begin();
-    Iterator End();
-    T& operator[](Key&& key);
+    const T& At(const Key& key, Version* version);
+    ConstIterator Find(const Key& key, Version* version);
+    ConstIterator CBegin(Version* version);
+    ConstIterator CEnd();
 
 #ifdef PRBT_TESTING
 protected:
@@ -89,9 +95,10 @@ private:
     Node* TreePredecessor(Version* version, Node* node);
     void DeleteFixup(std::stack<Node**>& path);
     void CreateCopyAndPlant(Node** node_ptr);
+    Node* TreeMinimumTraverseSingleUse(Node* sub_tree_root, std::stack<Node*>& path);
     // Node* root_;
     Node* nil_;
-    Version* version_head_;
+    Version* version_nil_;
 };
 
 // ---------- definition ----------
@@ -101,13 +108,16 @@ PersistentRedBlackTree<Key, T>::PersistentRedBlackTree()
 {
     nil_ = new Node();
     nil_->color = Node::BLACK;
-    version_head_ = nullptr;
+    version_nil_ = new Version();
+    version_nil_->next_ = version_nil_->prev_ = version_nil_;
+    version_nil_->root_ = nil_;
 }
 
 template <class Key, class T>
 PersistentRedBlackTree<Key, T>::~PersistentRedBlackTree()
 {
     Clear();
+    delete version_nil_;
     delete nil_;
 }
 
@@ -131,77 +141,82 @@ void PersistentRedBlackTree<Key, T>::RightRotate(Node** subtree_root_node_ptr)
     *subtree_root_node_ptr = new_root;
 }
 
-// template <class Key, class T>
-// typename PersistentRedBlackTree<Key, T>::Iterator PersistentRedBlackTree<Key, T>::Find(const Key& key)
-// {
-//     Node* now;
-//     now = root_;
-//     while (now != nil_)
-//     {
-//         if (now->value.first == key)
-//             break;
-//         else if (now->value.first < key)
-//             now = now->right;
-//         else
-//             now = now->left;
-//     }
-//     return Iterator(now, this);
-// }
+template <class Key, class T>
+typename PersistentRedBlackTree<Key, T>::ConstIterator PersistentRedBlackTree<Key, T>::Find
+    (const Key& key, Version* version)
+{
+    Node* now;
+    now = version->root_;
+    while (now != nil_)
+    {
+        if (now->value.first == key)
+            break;
+        else if (now->value.first < key)
+            now = now->right;
+        else
+            now = now->left;
+    }
+    return ConstIterator(now, this, version);
+}
  
-// template <class Key, class T>
-// T& PersistentRedBlackTree<Key, T>::At(const Key& key)
-// {
-//     Node* now;
-//     now = root_;
-//     while (now != nil_)
-//     {
-//         if (now->value.first == key)
-//             return now->value.second;
-//         else if (now->value.first < key)
-//             now = now->right;
-//         else
-//             now = now->left;
-//     }
-//     throw std::out_of_range("the container does not have an element with the specified key");
-// }
-
-// template <class Key, class T>
-// T& PersistentRedBlackTree<Key, T>::operator[](Key&& key)
-// {
-//     Node *node, **now_ptr, *parent;
-//     parent = nil_;
-//     now_ptr = &root_;
-//     while (*now_ptr != nil_)
-//     {
-//         parent = *now_ptr;
-//         if (key == (*now_ptr)->value.first)
-//             return (*now_ptr)->value.second;
-//         else if (key < (*now_ptr)->value.first)
-//             now_ptr = &((*now_ptr)->left);
-//         else
-//             now_ptr = &((*now_ptr)->right);
-//     }
-//     node = new Node(std::make_pair(key, T()));
-//     *now_ptr = node;
-//     node->parent = parent;
-//     node->right = node->left = nil_;
-//     node->color = Node::RED;
-//     InsertFixup(node);
-//     return node->value.second;
-// }
+template <class Key, class T>
+const T& PersistentRedBlackTree<Key, T>::At(const Key& key, Version* version)
+{
+    Node* now;
+    now = version->root_;
+    while (now != nil_)
+    {
+        if (now->value.first == key)
+            return now->value.second;
+        else if (now->value.first < key)
+            now = now->right;
+        else
+            now = now->left;
+    }
+    throw std::out_of_range("the container does not have an element with the specified key");
+}
 
 template <class Key, class T>
-std::pair<typename PersistentRedBlackTree<Key, T>::Iterator, bool> 
+std::pair<typename PersistentRedBlackTree<Key, T>::ConstIterator, bool> 
+    PersistentRedBlackTree<Key, T>::InsertOrAssign
+    (const ValueType& value)
+{
+    return InsertOrAssign(value, version_nil_->next_);
+}
+
+template <class Key, class T>
+std::pair<typename PersistentRedBlackTree<Key, T>::ConstIterator, bool> 
+    PersistentRedBlackTree<Key, T>::InsertOrAssign
+    (const ValueType& value, Version* dependent_version)
+{
+    std::pair<ConstIterator, bool> insert_result;
+    insert_result = Insert(value, dependent_version);
+    if (insert_result.second == false) insert_result.first.node_->value.second = value.second;
+    return insert_result;
+}
+
+template <class Key, class T>
+std::pair<typename PersistentRedBlackTree<Key, T>::ConstIterator, bool> 
     PersistentRedBlackTree<Key, T>::Insert
-    (Version* dependent_version, const ValueType& value)
+    (const ValueType& value)
+{
+    return Insert(value, version_nil_->next_);
+}
+
+template <class Key, class T>
+std::pair<typename PersistentRedBlackTree<Key, T>::ConstIterator, bool> 
+    PersistentRedBlackTree<Key, T>::Insert
+    (const ValueType& value, Version* dependent_version)
 {
     Node *dep_now, **new_next_ptr;
     Version* new_version;
     std::stack<Node**> path;
-    new_version = new Version(version_head_, nil_);
-    version_head_ = new_version;
+    new_version = new Version(version_nil_->next_, version_nil_, nil_);
+    version_nil_->next_ = new_version;
+    new_version->next_->prev_ = new_version;
     new_next_ptr = &(new_version->root_);
-    dep_now = dependent_version == nullptr ? nil_ : dependent_version->root_;
+    // dep_now = dependent_version == nullptr ? nil_ : dependent_version->root_;
+    dep_now = dependent_version->root_;
     while (dep_now != nil_)
     {
         *new_next_ptr = new Node(dep_now->value);
@@ -213,7 +228,7 @@ std::pair<typename PersistentRedBlackTree<Key, T>::Iterator, bool>
             ++dep_now->left->use_count;
             (*new_next_ptr)->right = dep_now->right;
             ++dep_now->right->use_count;
-            return std::make_pair(Iterator(*new_next_ptr, this, new_version), false);
+            return std::make_pair(ConstIterator(*new_next_ptr, this, new_version), false);
         }
         else if (value.first < dep_now->value.first)
         {
@@ -235,7 +250,7 @@ std::pair<typename PersistentRedBlackTree<Key, T>::Iterator, bool>
     (*new_next_ptr)->color = Node::RED;
     (*new_next_ptr)->left = (*new_next_ptr)->right = nil_;
     InsertFixup(path);
-    return std::make_pair(Iterator(*new_next_ptr, this, new_version), true);
+    return std::make_pair(ConstIterator(*new_next_ptr, this, new_version), true);
 }
 
 template <class Key, class T>
@@ -316,7 +331,8 @@ void PersistentRedBlackTree<Key, T>::InsertFixup(std::stack<Node**>& path)
 }
 
 template <class Key, class T>
-typename PersistentRedBlackTree<Key, T>::Node* PersistentRedBlackTree<Key, T>::TreeMinimum(Node* sub_tree_root)
+typename PersistentRedBlackTree<Key, T>::Node* PersistentRedBlackTree<Key, T>::TreeMinimum
+    (Node* sub_tree_root)
 {
     while (sub_tree_root->left != nil_)
         sub_tree_root = sub_tree_root->left;
@@ -324,7 +340,20 @@ typename PersistentRedBlackTree<Key, T>::Node* PersistentRedBlackTree<Key, T>::T
 }
 
 template <class Key, class T>
-typename PersistentRedBlackTree<Key, T>::Node* PersistentRedBlackTree<Key, T>::TreeMaximum(Node* sub_tree_root)
+typename PersistentRedBlackTree<Key, T>::Node* PersistentRedBlackTree<Key, T>::TreeMinimumTraverseSingleUse
+    (Node* sub_tree_root, std::stack<Node*>& path)
+{
+    while (sub_tree_root->left != nil_ && sub_tree_root->left->use_count == 0)
+    {
+        path.push(sub_tree_root);
+        sub_tree_root = sub_tree_root->left;
+    }
+    return sub_tree_root;
+}
+
+template <class Key, class T>
+typename PersistentRedBlackTree<Key, T>::Node* PersistentRedBlackTree<Key, T>::TreeMaximum
+    (Node* sub_tree_root)
 {
     while (sub_tree_root->right != nil_)
         sub_tree_root = sub_tree_root->right;
@@ -335,46 +364,77 @@ template <class Key, class T>
 typename PersistentRedBlackTree<Key, T>::Node* PersistentRedBlackTree<Key, T>::TreeSuccessor
     (Version* version, Node* node)
 {
-    // Node* parent;
-    // if (node->right != this->nil_)
-    //     return this->TreeMinimum(node->right);
-    // parent = node->parent;
-    // while (parent != this->nil_ && parent->right == node)
-    // {
-    //     node = parent;
-    //     parent = node->parent;
-    // }
-    // return parent;
+    Node *now, *succ;
+    if (node->right != nil_) return TreeMinimum(node->right);
+    now = version->root_;
+    succ = nil_;
+    while (now != nil_)
+    {
+        if (now->value.first == node->value.first)
+        {
+            return succ;
+        }
+        else if (now->value.first > node->value.first)
+        {
+            succ = now;
+            now = now->left;
+        }
+        else
+        {
+            now = now->right;
+        }
+    }
+    throw std::runtime_error("node is not found in the version");
 }
 
 template <class Key, class T>
 typename PersistentRedBlackTree<Key, T>::Node* PersistentRedBlackTree<Key, T>::TreePredecessor
     (Version* version, Node* node)
 {
-    // Node* parent;
-    // if (node->left)
-    //     return TreeMaximum(node->left);
-    // parent = node->parent;
-    // while (parent && parent->left == node)
-    // {
-    //     node = parent;
-    //     parent = node->parent;
-    // }
-    // return parent;
+    Node *now, *prev;
+    if (node->left != nil_) return TreeMaximum(node->left);
+    now = version->root_;
+    prev = nil_;
+    while (now != nil_)
+    {
+        if (now->value.first == node->value.first)
+        {
+            return prev;
+        }
+        else if (now->value.first >node->value.first)
+        {
+            now = now->left;
+        }
+        else
+        {
+            prev = now;
+            now = now->right;
+        }
+    }
+    throw std::runtime_error("node is not found in the version");
 }
 
 template <class Key, class T>
 std::pair<typename PersistentRedBlackTree<Key, T>::Version*, bool> 
-PersistentRedBlackTree<Key, T>::Delete(Version* dependent_version, const Key& key)
+PersistentRedBlackTree<Key, T>::Delete(const Key& key)
+{
+    return Delete(key, version_nil_->next_);
+}
+
+template <class Key, class T>
+std::pair<typename PersistentRedBlackTree<Key, T>::Version*, bool> 
+PersistentRedBlackTree<Key, T>::Delete(const Key& key, Version* dependent_version)
 {
     Node *dep_now, **new_next_ptr, *deleted;
     Version* new_version;
     std::stack<Node**> path;
     bool is_black_deleted;
-    new_version = new Version(version_head_, nil_);
-    version_head_ = new_version;
+    new_version = new Version(version_nil_->next_, version_nil_, nil_);
+    version_nil_->next_ = new_version;
+    new_version->next_->prev_ = new_version;
     new_next_ptr = &(new_version->root_);
-    dep_now = dependent_version == nullptr ? nil_ : dependent_version->root_;
+    // dep_now = dependent_version == nullptr ? nil_ : dependent_version->root_;
+    dep_now = dependent_version->root_;
     while (dep_now != nil_)
     {
         if (key == dep_now->value.first)
@@ -502,13 +562,17 @@ void PersistentRedBlackTree<Key, T>::DeleteFixup(std::stack<Node**>& path)
                     CreateCopyAndPlant(sibling_ptr);
                     CreateCopyAndPlant(&((*sibling_ptr)->left));
                     // perform case 3
-                    (*sibling_ptr)->left->color = Node::BLACK;
-                    (*sibling_ptr)->color = Node::RED;
+                    // case 4 will override the colors
+                    // (*sibling_ptr)->left->color = Node::BLACK;
+                    // (*sibling_ptr)->color = Node::RED;
                     RightRotate(sibling_ptr);
                     // sibling_ptr = &((*parent_ptr)->right);
                 }
-                CreateCopyAndPlant(sibling_ptr);
-                CreateCopyAndPlant(&((*sibling_ptr)->right));
+                else
+                {
+                    CreateCopyAndPlant(sibling_ptr);
+                    CreateCopyAndPlant(&((*sibling_ptr)->right));
+                }
                 // perform case 4
                 (*sibling_ptr)->color = (*parent_ptr)->color;
                 (*parent_ptr)->color = Node::BLACK;
@@ -565,39 +629,60 @@ void PersistentRedBlackTree<Key, T>::DeleteFixup(std::stack<Node**>& path)
 }
 
 template <class Key, class T>
-void PersistentRedBlackTree<Key, T>::Clear()
+void PersistentRedBlackTree<Key, T>::RemoveVersion(Version* version)
 {
-    // Node *now, *parent;
-    // now = TreeMinimum(root_);
-    // while (now != nil_)
-    // {
-    //     while (now->right != nil_)
-    //     {
-    //         now = TreeMinimum(now->right);
-    //     }
-    //     parent = now->parent;
-    //     while (parent != nil_ && parent->right == now)
-    //     {
-    //         delete now;
-    //         now = parent;
-    //         parent = now->parent;
-    //     }
-    //     delete now;
-    //     now = parent;
-    // }
-    // root_ = nil_;
+    Node *now, *parent;
+    std::stack<Node*> path;
+    if (version->root_ != nil_) 
+    {
+        path.push(nil_);
+        now = TreeMinimumTraverseSingleUse(version->root_, path);
+        --now->left->use_count;
+        while (now != nil_)
+        {
+            while (now->right != nil_ && now->right->use_count == 0)
+            {
+                path.push(now);
+                now = now->right;
+                now = TreeMinimumTraverseSingleUse(now, path);
+                --now->left->use_count;
+            }
+            --now->right->use_count;
+            parent = path.top();
+            while (parent != nil_ && parent->right == now)
+            {
+                delete now;
+                now = parent;
+                path.pop();
+                parent = path.top();
+            }
+            delete now;
+            now = parent;
+            path.pop();
+        }
+        version->root_ = nil_;
+    }
+    version->prev_->next_ = version->next_;
+    version->next_->prev_ = version->prev_;
+    delete version;
 }
 
-// template <class Key, class T>
-// typename PersistentRedBlackTree<Key, T>::Iterator PersistentRedBlackTree<Key, T>::Begin()
-// {
-//     return Iterator(TreeMinimum(root_), this);
-// }
+template <class Key, class T>
+void PersistentRedBlackTree<Key, T>::Clear()
+{
+    while (version_nil_->next_ != version_nil_) RemoveVersion(version_nil_->next_);
+}
 
-// template <class Key, class T>
-// typename PersistentRedBlackTree<Key, T>::Iterator PersistentRedBlackTree<Key, T>::End()
-// {
-//     return Iterator(nil_, this);
-// }
+template <class Key, class T>
+typename PersistentRedBlackTree<Key, T>::ConstIterator PersistentRedBlackTree<Key, T>::CBegin(Version* version)
+{
+    return ConstIterator(TreeMinimum(version->root_), this, version);
+}
+
+template <class Key, class T>
+typename PersistentRedBlackTree<Key, T>::ConstIterator PersistentRedBlackTree<Key, T>::CEnd()
+{
+    return ConstIterator(nil_, this, version_nil_);
+}
 
 #endif
