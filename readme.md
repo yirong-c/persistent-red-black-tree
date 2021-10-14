@@ -2,6 +2,10 @@
 
 This module is a part of [frc123/CLRS-code-solution](https://github.com/frc123/CLRS-code-solution)
 
+## Description
+
+![](https://github.com/frc123/persistent-red-black-tree/blob/master/persistent-dynamic-set.png)
+
 ## File Structure
 
 ```bash
@@ -10,10 +14,6 @@ This module is a part of [frc123/CLRS-code-solution](https://github.com/frc123/C
 ├── persistent_red_black_tree_test.hpp     # auxiliary test functions
 └── persistent_red_black_tree_test.cpp     # test cases (catch2)
 ```
-
-## Description
-
-![](https://github.com/frc123/persistent-red-black-tree/blob/master/persistent-dynamic-set.png)
 
 ## Bibliography
 
