@@ -609,13 +609,17 @@ void PersistentRedBlackTree<Key, T>::DeleteFixup(std::stack<Node**>& path)
                     CreateCopyAndPlant(sibling_ptr);
                     CreateCopyAndPlant(&((*sibling_ptr)->right));
                     // perform case 3
-                    (*sibling_ptr)->right->color = Node::BLACK;
-                    (*sibling_ptr)->color = Node::RED;
+                    // case 4 will override the colors
+                    // (*sibling_ptr)->right->color = Node::BLACK;
+                    // (*sibling_ptr)->color = Node::RED;
                     LeftRotate(sibling_ptr);
                     // sibling_ptr = &((*parent_ptr)->left);
                 }
-                CreateCopyAndPlant(sibling_ptr);
-                CreateCopyAndPlant(&((*sibling_ptr)->left));
+                else
+                {
+                    CreateCopyAndPlant(sibling_ptr);
+                    CreateCopyAndPlant(&((*sibling_ptr)->left));
+                }
                 // perform case 4
                 (*sibling_ptr)->color = (*parent_ptr)->color;
                 (*parent_ptr)->color = Node::BLACK;
