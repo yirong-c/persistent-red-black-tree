@@ -1,8 +1,14 @@
 # persistent red black tree
 
-This module is a part of [frc123/CLRS-code-solution](https://github.com/frc123/CLRS-code-solution)
+This module is a part of [frc123/CLRS](https://github.com/frc123/CLRS)
 
 ## Description
+
+- Red-black trees
+that maintain past versions of a red-black tree.
+
+- Guarantee O(lg n) running time and space
+per selection insertion, or deletion.
 
 ![](https://github.com/frc123/persistent-red-black-tree/blob/master/persistent-dynamic-set.png)
 
